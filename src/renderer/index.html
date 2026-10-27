@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'"
+    />
+    <title>IsoTabs</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header id="chrome">
+      <div id="tabstrip">
+        <div id="tabs"></div>
+        <button id="new-tab" class="icon-btn" title="New isolated tab (Ctrl+T)">
+          <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
+        </button>
+      </div>
+      <div id="toolbar">
+        <button id="back" class="icon-btn" title="Back (Alt+Left)">
+          <svg viewBox="0 0 16 16"><path d="M13 8H3m4-4L3 8l4 4" /></svg>
+        </button>
+        <button id="forward" class="icon-btn" title="Forward (Alt+Right)">
+          <svg viewBox="0 0 16 16"><path d="M3 8h10m-4-4 4 4-4 4" /></svg>
+        </button>
+        <button id="reload" class="icon-btn" title="Reload (Ctrl+R)">
+          <svg class="reload" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3" /></svg>
+          <svg class="stop" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+        </button>
+        <form id="omnibox">
+          <span id="identity" title="This tab's isolated identity (double-click to rename)"></span>
+          <input id="address" spellcheck="false" autocomplete="off" placeholder="Search Google or type a URL" />
+        </form>
+        <span
+          id="no-sandbox"
+          hidden
+          title="Chromium's sandbox is off because this system blocks unprivileged user namespaces (e.g. Ubuntu 23.10+). Websites run with fewer protections. See the README to turn it on."
+          >No sandbox</span
+        >
+      </div>
+    </header>
+    <main id="blank" hidden>
+      <h1 id="blank-name" dir="auto"></h1>
+      <p>This tab is its own isolated browser: cookies, logins, storage and cache are not shared with any other tab.</p>
+      <p>All of it is kept on disk and restored when you restart.</p>
+      <ul>
+        <li><kbd>F2</kbd> or double-click the tab to rename it</li>
+        <li>Right-click the tab to change its color or clear its data</li>
+        <li><kbd>Ctrl</kbd>+<kbd>T</kbd> opens a new isolated tab</li>
+      </ul>
+    </main>
+    <script src="renderer.js"></script>
+  </body>
+</html>

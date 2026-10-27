@@ -1,0 +1,48 @@
+{
+  "name": "isotabs",
+  "productName": "IsoTabs",
+  "version": "1.0.0",
+  "description": "Chromium browser where every tab is an isolated, persistent session with its own name",
+  "main": "src/main.js",
+  "desktopName": "isotabs.desktop",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable --x64",
+    "dist:linux": "electron-builder --linux AppImage --x64",
+    "dist:linux:docker": "docker run --rm -v \"%cd%:/project\" -v isotabs-builder-cache:/root/.cache -w /project electronuserland/builder node node_modules/electron-builder/cli.js --linux AppImage --x64",
+    "postinstall": "node node_modules/electron/install.js"
+  },
+  "build": {
+    "appId": "app.isotabs.browser",
+    "productName": "IsoTabs",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "build/icon.png"
+    },
+    "portable": {
+      "artifactName": "IsoTabs-${version}-portable.exe"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "executableName": "isotabs",
+      "syncDesktopName": true,
+      "category": "Network",
+      "synopsis": "Browser where every tab is an isolated, persistent session"
+    },
+    "appImage": {
+      "artifactName": "IsoTabs-${version}-x86_64.AppImage",
+      "executableArgs": []
+    }
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0"
+  }
+}

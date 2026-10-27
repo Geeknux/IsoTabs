@@ -4,6 +4,8 @@ A Chromium (Electron) browser where **every tab is its own isolated browser**: i
 localStorage/IndexedDB, cache and service workers. Nothing is shared between tabs, and each tab's data is
 kept on disk and restored on restart. Every tab has a name and color you choose.
 
+![IsoTabs with four tabs, each a separate identity with its own name, color and cookies](docs/screenshot.png)
+
 ## Download
 
 Get the latest build from [Releases](https://github.com/Geeknux/IsoTabs/releases/latest):

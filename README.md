@@ -26,7 +26,7 @@ npm start
 npm run dist
 ```
 
-Produces `dist/IsoTabs-1.0.0-portable.exe` (single file, no install). The portable exe unpacks itself to a temp
+Produces `dist/IsoTabs-<version>-portable.exe` (single file, no install). The portable exe unpacks itself to a temp
 folder on every launch, so it takes ~15–20 s to open; `dist/win-unpacked/IsoTabs.exe` starts instantly if you
 copy that whole folder instead. The exe is not code-signed, so Windows SmartScreen warns on first run
 ("More info" → "Run anyway"). The icon source is `build/icon.svg`.
@@ -39,13 +39,13 @@ Build on Windows with Docker (uses the official `electronuserland/builder` image
 npm run dist:linux:docker
 ```
 
-On a Linux machine, `npm run dist:linux` does the same without Docker. Output: `dist/IsoTabs-1.0.0-x86_64.AppImage`.
+On a Linux machine, `npm run dist:linux` does the same without Docker. Output: `dist/IsoTabs-<version>-x86_64.AppImage`.
 
 Run it:
 
 ```bash
-chmod +x IsoTabs-1.0.0-x86_64.AppImage
-./IsoTabs-1.0.0-x86_64.AppImage
+chmod +x IsoTabs-1.0.1-x86_64.AppImage
+./IsoTabs-1.0.1-x86_64.AppImage
 ```
 
 - If it complains about FUSE, install `libfuse2t64` (Ubuntu 24.04) / `libfuse2` (22.04), or run it with

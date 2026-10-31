@@ -20,6 +20,21 @@ const elements = new Map();
 
 const findTab = (id) => state.tabs.find((t) => t.id === id);
 
+// Show percent-encoded URLs readably (e.g. Persian paths), as Chrome does. "%25" and characters
+// that are invisible or reorder text (spaces, controls, bidi marks) stay encoded so the shown
+// URL can't hide or spoof anything; ZWNJ/ZWJ are allowed since Persian words use them.
+const UNSAFE_IN_URL = /[\s\p{Cc}\p{Cf}]/gu;
+function displayUrl(url) {
+  if (!url) return '';
+  try {
+    return decodeURI(url.replace(/%25/gi, '%2525')).replace(UNSAFE_IN_URL, (c) =>
+      c === '‌' || c === '‍' ? c : encodeURIComponent(c),
+    );
+  } catch {
+    return url;
+  }
+}
+
 // ---------- tab elements ----------
 
 function createTabEl(id) {
@@ -70,7 +85,7 @@ function createTabEl(id) {
 function updateTabEl(el, tab) {
   el.classList.toggle('active', tab.id === state.activeId);
   el.style.setProperty('--tab-color', tab.color);
-  el.title = [tab.name, tab.title, tab.url].filter(Boolean).join('\n');
+  el.title = [tab.name, tab.title, displayUrl(tab.url)].filter(Boolean).join('\n');
   el.querySelector('.name').textContent = tab.name;
 
   const icon = el.querySelector('.icon');
@@ -122,7 +137,7 @@ function render() {
     forwardBtn.disabled = !active.canGoForward;
     reloadBtn.classList.toggle('loading', active.loading);
     reloadBtn.title = active.loading ? 'Stop (Esc)' : 'Reload (Ctrl+R)';
-    if (document.activeElement !== address || state.activeId !== lastActiveId) address.value = active.url;
+    if (document.activeElement !== address || state.activeId !== lastActiveId) address.value = displayUrl(active.url);
     elements.get(active.id)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
   lastActiveId = state.activeId;
@@ -212,14 +227,23 @@ address.addEventListener('mouseup', (e) => {
 });
 address.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  address.value = findTab(state.activeId)?.url ?? '';
+  address.value = displayUrl(findTab(state.activeId)?.url);
   api.focusPage();
+});
+// Copying the whole, unedited address copies the real (encoded) URL, so pasted links keep working.
+address.addEventListener('copy', (e) => {
+  const url = findTab(state.activeId)?.url;
+  if (!url || address.value !== displayUrl(url)) return;
+  if (address.selectionStart !== 0 || address.selectionEnd !== address.value.length) return;
+  e.preventDefault();
+  e.clipboardData.setData('text/plain', url);
 });
 
 $('omnibox').addEventListener('submit', (e) => {
   e.preventDefault();
   if (!address.value.trim()) return;
-  api.navigate(address.value);
+  const url = findTab(state.activeId)?.url;
+  api.navigate(url && address.value === displayUrl(url) ? url : address.value);
   address.blur();
 });
 

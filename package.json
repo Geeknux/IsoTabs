@@ -1,7 +1,7 @@
 {
   "name": "isotabs",
   "productName": "IsoTabs",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Chromium browser where every tab is an isolated, persistent session with its own name",
   "main": "src/main.js",
   "desktopName": "isotabs.desktop",

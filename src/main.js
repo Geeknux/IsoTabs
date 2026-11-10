@@ -9,8 +9,10 @@ const SEARCH_URL = 'https://www.google.com/search?q=';
 // WebRTC must never bypass a tab's proxy: without this, a page's
 // RTCPeerConnection still gathers the machine's real public IP via STUN even
 // when all HTTP goes through the tab's proxy (the classic "WebRTC leak").
-// Relay-only candidate gathering keeps each tab's IP story consistent. Trade-
-// off: direct P2P connections need a TURN server, like any VPN browser.
+// Relay-only candidate gathering keeps each tab's IP story consistent, and
+// spoof.js presents the proxy's exit IP (fetched below) as the tab's public
+// candidate so WebRTC and HTTP report the same address. Trade-off: direct
+// P2P connections need a TURN server, like any VPN browser.
 app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'disable_non_proxied_udp');
 
 const COLORS = [
@@ -34,7 +36,7 @@ let uiReady = false;
 let renameOnLoad = null;
 let chromeHeight = 80;
 let activeId = null;
-/** @type {{id:string,name:string,color:string,url:string,title:string,favicon:string|null,loading:boolean,view:WebContentsView|null,identity:object,proxy:string}[]} */
+/** @type {{id:string,name:string,color:string,url:string,title:string,favicon:string|null,loading:boolean,view:WebContentsView|null,identity:object,proxy:string,publicIp:string|null}}[]} */
 let tabs = [];
 
 // Every tab lives in its own persistent partition: separate cookies, localStorage,
@@ -89,6 +91,7 @@ function loadStore() {
       // corrupt seed) get a fresh identity.
       identity: Number.isInteger(t.seed) ? identityFromSeed(t.seed) : createIdentity(),
       proxy: typeof t.proxy === 'string' ? t.proxy : '',
+      publicIp: null, // re-fetched from the proxy when the tab loads
     }));
     activeId = data.activeId;
   } catch {
@@ -257,6 +260,7 @@ function newTab({ rename = true } = {}) {
     view: null,
     identity: createIdentity(),
     proxy: '',
+    publicIp: null,
   };
   tabs.push(tab);
   activate(tab.id);
@@ -289,7 +293,17 @@ function ensureView(tab, url = tab.url) {
   configureSession(tab.view.webContents.session, tab.identity, tab.proxy);
   wireTab(tab);
   const wc = tab.view.webContents;
-  restoreSessionCookies(tab.id).finally(() => {
+  restoreSessionCookies(tab.id).finally(async () => {
+    // Proxied tabs learn their exit IP through the proxy before the first
+    // page load, so the spoof layer can present it as the WebRTC address.
+    // setProxy is awaited again here: configureSession fires it without
+    // waiting, and a direct echo lookup would return the REAL IP.
+    if (tab.proxy && !tab.publicIp) {
+      try {
+        await wc.session.setProxy({ mode: 'fixed_servers', proxyRules: tab.proxy });
+        tab.publicIp = await fetchExitIp(wc.session);
+      } catch {}
+    }
     if (!wc.isDestroyed()) wc.loadURL(url);
   });
   return tab.view;
@@ -303,6 +317,7 @@ function showView(tab) {
 function activate(id) {
   const tab = getTab(id);
   if (!tab || !win) return;
+  dismissPrompt();
   const prev = activeTab();
   activeId = id;
   // Move focus before swapping views: removing the focused view makes Chromium
@@ -403,16 +418,45 @@ function setColor(id, color) {
 // "http=user:pass@proxy:8080;https=proxy:8443". Empty means direct.
 const PROXY_URL_RE = /^(?:socks5h?|http|https|quic):\/\/[^\s]+$/i;
 const PROXY_LIST_RE = /^[a-z]+=[^;]+(?:;[a-z]+=[^;]+)*$/i;
-function setTabProxy(id, proxy) {
+const IP_ECHO_URLS = ['https://api.ipify.org/?format=json', 'https://api64.ipify.org/?format=json'];
+
+// The public IP the proxy exits from, asked through the tab's own proxied
+// session — the same route the tab's HTTP traffic takes, so the answer is the
+// address sites see. spoof.js presents it as the tab's WebRTC candidate.
+// Null (no proxy, or the lookups failed) means WebRTC stays fully hidden.
+async function fetchExitIp(ses) {
+  for (const url of IP_ECHO_URLS) {
+    try {
+      const res = await Promise.race([
+        ses.fetch(url),
+        new Promise((_r, rej) => setTimeout(() => rej(new Error('echo timeout')), 6000)),
+      ]);
+      const text = (await res.text()).trim();
+      let ip = text;
+      try {
+        ip = JSON.parse(text).ip || text;
+      } catch {}
+      if (/^(\d{1,3}\.){3}\d{1,3}$/.test(ip) || /^[0-9a-f:]+:[0-9a-f:]+$/i.test(ip)) return ip;
+    } catch {}
+  }
+  return null;
+}
+
+async function setTabProxy(id, proxy) {
   const tab = getTab(id);
   if (!tab) return;
   const clean = String(proxy ?? '').trim().slice(0, 500);
   if (clean && !PROXY_URL_RE.test(clean) && !PROXY_LIST_RE.test(clean)) return;
   tab.proxy = clean;
+  tab.publicIp = null;
   if (tab.view) {
     const ses = tab.view.webContents.session;
-    if (clean) ses.setProxy({ mode: 'fixed_servers', proxyRules: clean }).catch(() => {});
-    else ses.setProxy({ mode: 'direct' }).catch(() => {});
+    // Apply the route first, then learn its exit IP through it, then reload
+    // so the fresh page already sees a complete identity over IPC.
+    try {
+      await ses.setProxy(clean ? { mode: 'fixed_servers', proxyRules: clean } : { mode: 'direct' });
+      if (clean) tab.publicIp = await fetchExitIp(ses);
+    } catch {}
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.reload();
   }
   pushState();
@@ -675,18 +719,49 @@ function showTabMenu(id) {
 }
 
 // A one-field dialog rendered in the browser UI: main can't show inputs with
-// Electron's native dialog, so it delegates to the renderer over IPC.
+// Electron's native dialog, so it delegates to the renderer over IPC. The
+// active page view natively overlays the whole UI renderer, so it is hidden
+// while the prompt is up — otherwise the modal would be painted over by the
+// page on any tab with content loaded.
 let pendingPrompt = null;
+let promptHiddenView = null;
 function promptValue({ title, label, value = '', placeholder = '', onSave }) {
   if (!win || !uiReady) return;
+  const tab = activeTab();
+  if (tab?.view) {
+    promptHiddenView = tab.view;
+    win.contentView.removeChildView(tab.view);
+  }
   win.webContents.focus();
   win.webContents.send('ui:prompt', { kind: 'proxy', title, label, value, placeholder });
   pendingPrompt = { kind: 'proxy', onSave };
 }
 
+function restorePromptView() {
+  const view = promptHiddenView;
+  promptHiddenView = null;
+  if (!view || !win || view.webContents.isDestroyed()) return;
+  const tab = tabs.find((t) => t.view === view);
+  if (tab && tab.id === activeId) {
+    win.contentView.addChildView(view);
+    layout();
+    view.webContents.focus();
+  }
+}
+
+// Keyboard shortcuts (Ctrl+T, tab switching...) still work with the prompt
+// open; switching tabs dismisses it instead of leaving it half-hidden.
+function dismissPrompt() {
+  if (!pendingPrompt && !promptHiddenView) return;
+  pendingPrompt = null;
+  if (win && uiReady) win.webContents.send('ui:close-prompt');
+  restorePromptView();
+}
+
 on('ui:prompt-value', (value) => {
   const prompt = pendingPrompt;
   pendingPrompt = null;
+  restorePromptView();
   // null = cancelled; "" (empty proxy = direct connection) is a real answer.
   if (prompt && value != null) prompt.onSave(String(value));
 });
@@ -790,7 +865,9 @@ ipcMain.on('spoof-config', (event) => {
   const partition = event.sender.session?.partition || '';
   const id = partition.startsWith('persist:tab-') ? partition.slice('persist:tab-'.length) : null;
   const tab = id ? getTab(id) : null;
-  event.returnValue = tab ? tab.identity : null;
+  // webrtcIp: the proxy's exit IP (null without a proxy) — the spoof layer
+  // presents it as the tab's public WebRTC candidate.
+  event.returnValue = tab ? { ...tab.identity, webrtcIp: tab.publicIp } : null;
 });
 
 // ---------- shutdown ----------

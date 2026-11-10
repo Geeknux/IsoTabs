@@ -284,6 +284,10 @@ function closePrompt(commit) {
   api.sendPromptValue(commit ? promptInput.value : null);
 }
 
+// Main dismisses the prompt itself when a shortcut switches tabs while it
+// is open (the overlay blocks mouse switching already).
+api.onClosePrompt(() => closePrompt(false));
+
 promptInput.addEventListener('keydown', (e) => {
   e.stopPropagation();
   if (e.key === 'Enter') {

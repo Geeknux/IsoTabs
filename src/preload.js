@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('browser', {
   onRename: listen('ui:rename'),
   onFocusAddress: listen('ui:focus-address'),
   onPrompt: listen('ui:prompt'),
+  onClosePrompt: listen('ui:close-prompt'),
   // null means the user cancelled the prompt; "" is a real (empty) answer.
   sendPromptValue: send('ui:prompt-value'),
 });

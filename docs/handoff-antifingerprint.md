@@ -105,11 +105,25 @@ tab by the sender's session partition. Patches, before any page script runs:
 ### 3. `src/main.js`
 
 - Tabs carry `identity` (runtime) + `seed`, `proxy` (persisted in `tabs.json`).
-- **WebRTC (NEW):** `app.commandLine.appendSwitch('force-webrtc-ip-handling-policy',
-  'disable_non_proxied_udp')` at the top — relay-only candidate gathering, so
-  STUN can never leak the real public IP around a tab's proxy (the classic
-  WebRTC leak; without a proxy, tabs behave like a strict NAT). Global switch:
-  Chromium/Electron has no per-session WebRTC policy.
+- **WebRTC (NEW):** two halves that together make WebRTC report the tab's IP:
+  - `app.commandLine.appendSwitch('force-webrtc-ip-handling-policy',
+    'disable_non_proxied_udp')` at the top — relay-only candidate gathering,
+    so STUN can never leak the real public IP around a tab's proxy (Chromium
+    does not route STUN/UDP through proxies; global switch, no per-session
+    policy exists in Electron).
+  - **Proxy exit-IP presentation:** for proxied tabs, main fetches the
+    proxy's public IP through the tab's own session (`fetchExitIp`, via
+    api.ipify.org / api64.ipify.org, 6s timeout each; awaited AFTER
+    `setProxy` so the lookup cannot go direct and return the real IP) and
+    hands it to the preload as `identity.webrtcIp`. spoof.js then replaces
+    `RTCPeerConnection`: real candidate events are swallowed
+    (constructor-registered listener + stopImmediatePropagation; relay/TURN
+    candidates pass through), a deterministic fake set is dispatched first
+    (mDNS host UDP+TCP, srflx with the exit IP; ports/foundation/mdns name
+    derived from the seed), `localDescription/currentDescription` SDP gets
+    the fake candidate lines injected, and `getStats` rewrites srflx
+    local-candidate addresses. Without a proxy (or if the echo lookup
+    failed) nothing is presented and WebRTC stays fully hidden.
 - `configureSession(ses, identity, proxy)`: per-tab UA + `acceptLanguages`,
   rewrites `sec-ch-ua` / `sec-ch-ua-mobile` / `sec-ch-ua-platform` headers via
   `onBeforeSendHeaders` (platform from `identity.chPlatform` — matches the
@@ -124,6 +138,12 @@ tab by the sender's session partition. Patches, before any page script runs:
   - `src/renderer` shows a dark-theme modal (`#prompt` in index.html):
     Enter/Save commits, Escape/Cancel/backdrop-click sends **null**, and main
     skips `onSave` for null — `""` is a real answer (empty proxy = direct).
+    The active tab's WebContentsView is HIDDEN while the prompt is up
+    (promptValue/dismissPrompt/restorePromptView in main.js): the page view
+    natively overlays the UI renderer, so without this the modal is painted
+    over by the page and invisible on any tab with content loaded (bug found
+    by the user 2026-11-10). Tab switches dismiss the prompt via the
+    `ui:close-prompt` channel.
   - `pushState` sends `proxy`; the tab shows a small proxy badge
     (`.tab.proxied .icon::after`) and tooltip line.
 
@@ -132,7 +152,11 @@ tab by the sender's session partition. Patches, before any page script runs:
 Two throwaway harnesses: the spoof probe ALL GREEN across 15 seeds covering
 all three OS profiles (windows ×9, macos ×2, linux ×2, 39 checks each; one
 iteration caught the `devicePixelRatio` own-property bug — dpr≠1 seeds failed
-until the patch target was fixed) and the prompt flow (12 checks):
+until the patch target was fixed), the prompt flow (12 checks), and a WebRTC
+probe (9 checks × 4 seeds: fake srflx delivered with the claimed IP, real
+host/srflx candidates never reach the page — verified both with and without
+the relay-only policy —, SDP injection keeps parseable, srflx stats rewritten,
+null end-of-candidates still arrives after the fakes):
 
 - Spoof probe: boots a `WebContentsView` with the spoof preload +
   `ipcMain.on('spoof-config')` stub, runs an inline async JS probe, main
@@ -181,8 +205,12 @@ Re-creating the harnesses — gotchas learned the hard way:
 - **WebRTC trade-off**: `disable_non_proxied_udp` means no host/srflx
   candidates — WebRTC still works only via TURN relay. Sites can observe
   "no direct candidates" (VPN-like; many VPN users look the same), and direct
-  P2P video calls need a TURN server. If a use case ever needs real P2P,
-  remove the switch in `src/main.js` and accept the STUN leak.
+  P2P video calls need a TURN server. For proxied tabs the fake srflx
+  candidate covers IP-consistency tests; the fake candidates cannot actually
+  carry media (a real connection still needs TURN). If a use case ever needs
+  real P2P, remove the switch in `src/main.js` and accept the STUN leak.
+  The exit-IP echo services see only the proxy IP; if both lookups fail
+  (unusual), WebRTC stays hidden rather than presenting a wrong address.
 - **Claimed-OS vs host leftovers**: the claimed OS drives UA, client hints,
   fonts, GPU strings — but host-level leftovers can contradict it: the TLS
   stack is the same Windows build everywhere (fine — same Chromium), and

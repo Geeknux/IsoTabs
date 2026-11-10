@@ -479,6 +479,138 @@ try {
 } catch {}
 
 // ---------------------------------------------------------------------------
+// WebRTC — when the tab has its own proxy, present the proxy's exit IP
+// (identity.webrtcIp, fetched by main through the proxied session) as the
+// public srflx candidate, so WebRTC agrees with the tab's HTTP IP. Chromium
+// never routes STUN/UDP through a proxy, so the real gathering (already
+// relay-only thanks to the app-wide policy) is swallowed and the page instead
+// receives a small, deterministic, plausible candidate set.
+// ---------------------------------------------------------------------------
+(() => {
+  const RealPC = window.RTCPeerConnection;
+  const ip = identity.webrtcIp;
+  if (!RealPC || !ip) return; // no proxy (or exit IP unknown): WebRTC stays hidden
+
+  const r = identity.noise.webgl >>> 0;
+  const hex4 = (n) => ((r >>> n) & 0xffff).toString(16).padStart(4, '0');
+  const mdns = hex4(0) + hex4(8) + hex4(16) + hex4(24) + '.local';
+  const portUdp = 1024 + (r % 64512);
+  const portTcp = 1024 + ((r >>> 8) % 64512);
+  const portSrflx = 1024 + ((r >>> 16) % 64512);
+  const foundation = 1 + (r % 8);
+  const raddr = ip.includes(':') ? '::' : '0.0.0.0';
+  const FAKE_CANDIDATES = [
+    `candidate:${foundation} 1 udp 2113667327 ${mdns} ${portUdp} typ host generation 0`,
+    `candidate:${foundation + 1} 2 tcp 1677729535 ${mdns} ${portTcp} typ host tcptype passive generation 0`,
+    `candidate:${foundation + 2} 1 udp 1694498815 ${ip} ${portSrflx} typ srflx raddr ${raddr} rport 0 generation 0`,
+  ];
+
+  // Add the fake candidate lines to a gathered SDP so pages that parse
+  // pc.localDescription instead of the events see the same story.
+  const injectIntoSdp = (sdp) => {
+    if (typeof sdp !== 'string' || sdp.includes(ip)) return sdp;
+    const block = FAKE_CANDIDATES.map((c) => 'a=' + c).join('\r\n');
+    if (sdp.includes('a=end-of-candidates')) return sdp.replace(/a=end-of-candidates/g, block + '\r\na=end-of-candidates');
+    return sdp.endsWith('\r\n') || sdp.endsWith('\n') ? sdp + block + '\r\n' : sdp + '\r\n' + block + '\r\n';
+  };
+
+  const makeIceEvent = (candidate) => {
+    const ev = new Event('icecandidate');
+    Object.defineProperty(ev, 'candidate', { get: () => candidate });
+    return ev;
+  };
+
+  function PatchedRTCPeerConnection(...args) {
+    const pc = new RealPC(...args);
+    let delivered = false;
+    let dispatching = false; // our own synthetic events flow through untouched
+    const deliverFakes = () => {
+      if (delivered) return;
+      delivered = true;
+      dispatching = true;
+      try {
+        for (const line of FAKE_CANDIDATES) {
+          try {
+            pc.dispatchEvent(makeIceEvent(new RTCIceCandidate({ candidate: line, sdpMid: '0', sdpMLineIndex: 0 })));
+          } catch {}
+        }
+      } finally {
+        dispatching = false;
+      }
+    };
+    // Registered in the constructor, so it always runs BEFORE handlers the
+    // page registers: real candidates are swallowed, our fakes go out first,
+    // and the end-of-gathering (null) event keeps its normal timing.
+    pc.addEventListener('icecandidate', (e) => {
+      if (dispatching) return; // synthetic — let the page's handlers have it
+      const c = e.candidate;
+      if (!c) {
+        deliverFakes();
+        return;
+      }
+      e.stopImmediatePropagation();
+      deliverFakes();
+      // Relay (TURN) candidates are functional and reveal nothing about this
+      // machine — pass them through after the fakes.
+      if (/ typ relay/.test(c.candidate || '')) {
+        dispatching = true;
+        try {
+          pc.dispatchEvent(makeIceEvent(c));
+        } finally {
+          dispatching = false;
+        }
+      }
+    });
+    // Descriptions: the SDP gets the fake candidates injected. The original
+    // string is read BEFORE the getter is replaced, or the getter would call
+    // itself forever.
+    for (const prop of ['localDescription', 'currentDescription']) {
+      const desc = Object.getOwnPropertyDescriptor(RealPC.prototype, prop);
+      if (desc && desc.get) {
+        Object.defineProperty(pc, prop, {
+          get() {
+            const d = desc.get.call(pc);
+            if (d) {
+              try {
+                const origSdp = d.sdp;
+                Object.defineProperty(d, 'sdp', { get: () => injectIntoSdp(origSdp) });
+              } catch {}
+            }
+            return d;
+          },
+          configurable: true,
+        });
+      }
+    }
+    // getStats: any srflx local candidate reports the claimed IP.
+    const origGetStats = pc.getStats.bind(pc);
+    pc.getStats = disguise(async function (...args) {
+      const report = await origGetStats(...args);
+      try {
+        const out = new Map();
+        report.forEach((v) => {
+          if (v && v.type === 'local-candidate' && v.candidateType === 'srflx') {
+            const copy = Object.assign(Object.create(Object.getPrototypeOf(v)), v);
+            if (copy.address) copy.address = ip;
+            if (copy.ip) copy.ip = ip;
+            v = copy;
+          }
+          out.set(v && v.id, v);
+        });
+        return out;
+      } catch {
+        return report;
+      }
+    }, 'getStats');
+    return pc;
+  }
+  Object.setPrototypeOf(PatchedRTCPeerConnection, RealPC);
+  PatchedRTCPeerConnection.prototype = RealPC.prototype;
+  window.RTCPeerConnection = disguise(PatchedRTCPeerConnection, 'RTCPeerConnection');
+  if (window.webkitRTCPeerConnection) window.webkitRTCPeerConnection = PatchedRTCPeerConnection;
+})();
+
+// ---------------------------------------------------------------------------
 // Audio — OfflineAudioContext output perturbed by a seeded constant.
 // The same channel always returns the same Float32Array, so keying the
 // WeakSet on that array noises each channel exactly once, and the noise

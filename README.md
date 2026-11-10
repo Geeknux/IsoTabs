@@ -88,8 +88,9 @@ Shortcuts use physical keys, so they also work with a Persian keyboard layout.
   tab looks the same after a restart. Patched APIs report `[native code]` like real Chrome.
 - Right-click → **Proxy…** routes one tab's traffic through its own proxy (e.g. `socks5://127.0.0.1:1080`),
   so tabs can have different IP addresses too; a small badge marks proxied tabs.
-- **WebRTC is relay-only** (`disable_non_proxied_udp`): STUN can never reveal your real IP around a tab's
-  proxy, and device enumeration shows a generic fake list. Direct P2P calls need a TURN server — the same
-  trade-off VPN browsers make.
+- **WebRTC never leaks your real IP** (`disable_non_proxied_udp`): a proxied tab even *presents* the
+  proxy's public IP as its WebRTC address (fetched through the proxy itself), so IP-leak tests see one
+  consistent IP; without a proxy, WebRTC reveals nothing. Device enumeration shows a generic fake list.
+  Direct P2P calls need a TURN server — the same trade-off VPN browsers make.
 
 Storage and fingerprint isolation are built in; a per-tab IP needs a per-tab proxy.

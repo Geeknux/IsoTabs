@@ -64,7 +64,7 @@ chmod +x IsoTabs-1.0.1-x86_64.AppImage
 | --- | --- |
 | New isolated tab | `Ctrl+T` or `+` (you're asked to name it right away) |
 | Rename a tab | `F2`, double-click the tab, or right-click → Rename |
-| Change color / clear data | Right-click the tab |
+| Change color / clear data / per-tab proxy | Right-click the tab |
 | Close a tab | `Ctrl+W`, `×`, or middle-click (**deletes all of that tab's data**) |
 | Reorder | Drag a tab |
 | Address bar | `Ctrl+L` |
@@ -82,6 +82,14 @@ Shortcuts use physical keys, so they also work with a Persian keyboard layout.
 - Tabs load lazily: after a restart, a tab only loads when you open it.
 - Popups (e.g. "Sign in with Google") open in a window that shares the tab's identity; `target=_blank`
   links open in the same tab, since a new tab would be a new, empty identity.
-- The user agent is plain Chrome (no `Electron/` token).
+- Every tab also presents its own **stable, fake fingerprint** derived from a per-tab seed: operating
+  system (Windows, macOS or Linux, picked by market share), user agent, client hints, screen size &
+  pixel ratio, GPU string, canvas/audio noise, timezone, fonts… Tabs look like different machines, and a
+  tab looks the same after a restart. Patched APIs report `[native code]` like real Chrome.
+- Right-click → **Proxy…** routes one tab's traffic through its own proxy (e.g. `socks5://127.0.0.1:1080`),
+  so tabs can have different IP addresses too; a small badge marks proxied tabs.
+- **WebRTC is relay-only** (`disable_non_proxied_udp`): STUN can never reveal your real IP around a tab's
+  proxy, and device enumeration shows a generic fake list. Direct P2P calls need a TURN server — the same
+  trade-off VPN browsers make.
 
-Isolation covers storage only: all tabs still share your IP address and browser fingerprint.
+Storage and fingerprint isolation are built in; a per-tab IP needs a per-tab proxy.

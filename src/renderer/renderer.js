@@ -84,8 +84,9 @@ function createTabEl(id) {
 
 function updateTabEl(el, tab) {
   el.classList.toggle('active', tab.id === state.activeId);
+  el.classList.toggle('proxied', !!tab.proxy);
   el.style.setProperty('--tab-color', tab.color);
-  el.title = [tab.name, tab.title, displayUrl(tab.url)].filter(Boolean).join('\n');
+  el.title = [tab.name, tab.title, displayUrl(tab.url), tab.proxy ? `Proxy: ${tab.proxy}` : ''].filter(Boolean).join('\n');
   el.querySelector('.name').textContent = tab.name;
 
   const icon = el.querySelector('.icon');
@@ -259,6 +260,47 @@ identity.addEventListener('contextmenu', (e) => {
 tabsEl.addEventListener('dblclick', (e) => {
   if (e.target === tabsEl) api.newTab();
 });
+
+// ---------- one-field prompt (proxy, ...) ----------
+
+const promptEl = $('prompt');
+const promptInput = $('prompt-input');
+
+function openPrompt({ title = '', label = '', value = '', placeholder = '' } = {}) {
+  $('prompt-title').textContent = title;
+  $('prompt-label').textContent = label;
+  promptInput.value = value;
+  promptInput.placeholder = placeholder;
+  promptEl.hidden = false;
+  promptInput.focus();
+  promptInput.select();
+}
+
+function closePrompt(commit) {
+  if (promptEl.hidden) return;
+  promptEl.hidden = true;
+  // null tells main the prompt was cancelled; "" (e.g. empty proxy = direct
+  // connection) is a real answer and must reach onSave.
+  api.sendPromptValue(commit ? promptInput.value : null);
+}
+
+promptInput.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    closePrompt(true);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closePrompt(false);
+  }
+});
+$('prompt-save').addEventListener('click', () => closePrompt(true));
+$('prompt-cancel').addEventListener('click', () => closePrompt(false));
+// Clicking the backdrop (not the card) cancels.
+promptEl.addEventListener('mousedown', (e) => {
+  if (e.target === promptEl) closePrompt(false);
+});
+api.onPrompt(openPrompt);
 
 // Keep the page view positioned right under the browser chrome.
 new ResizeObserver(([entry]) => api.setChromeHeight(entry.target.getBoundingClientRect().height)).observe($('chrome'));

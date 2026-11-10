@@ -2,8 +2,16 @@ const { app, BrowserWindow, WebContentsView, ipcMain, session, Menu, dialog, cli
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const { createIdentity, identityFromSeed } = require('./identity');
 
 const SEARCH_URL = 'https://www.google.com/search?q=';
+
+// WebRTC must never bypass a tab's proxy: without this, a page's
+// RTCPeerConnection still gathers the machine's real public IP via STUN even
+// when all HTTP goes through the tab's proxy (the classic "WebRTC leak").
+// Relay-only candidate gathering keeps each tab's IP story consistent. Trade-
+// off: direct P2P connections need a TURN server, like any VPN browser.
+app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'disable_non_proxied_udp');
 
 const COLORS = [
   ['Blue', '#8ab4f8'],
@@ -26,7 +34,7 @@ let uiReady = false;
 let renameOnLoad = null;
 let chromeHeight = 80;
 let activeId = null;
-/** @type {{id:string,name:string,color:string,url:string,title:string,favicon:string|null,loading:boolean,view:WebContentsView|null}[]} */
+/** @type {{id:string,name:string,color:string,url:string,title:string,favicon:string|null,loading:boolean,view:WebContentsView|null,identity:object,proxy:string}[]} */
 let tabs = [];
 
 // Every tab lives in its own persistent partition: separate cookies, localStorage,
@@ -76,6 +84,11 @@ function loadStore() {
       favicon: null,
       loading: false,
       view: null,
+      // The stored seed regenerates the exact same fake identity on restart,
+      // so a tab's fingerprint survives restarts. Tabs from older saves (or a
+      // corrupt seed) get a fresh identity.
+      identity: Number.isInteger(t.seed) ? identityFromSeed(t.seed) : createIdentity(),
+      proxy: typeof t.proxy === 'string' ? t.proxy : '',
     }));
     activeId = data.activeId;
   } catch {
@@ -91,7 +104,10 @@ function save() {
 
 function saveNow() {
   clearTimeout(saveTimer);
-  const data = { activeId, tabs: tabs.map(({ id, name, color, url }) => ({ id, name, color, url })) };
+  const data = {
+    activeId,
+    tabs: tabs.map(({ id, name, color, url, identity, proxy }) => ({ id, name, color, url, seed: identity.seed, proxy })),
+  };
   const file = storeFile();
   fs.writeFileSync(file + '.tmp', JSON.stringify(data, null, 2));
   fs.renameSync(file + '.tmp', file);
@@ -212,6 +228,7 @@ function pushState() {
         title: t.title,
         favicon: t.favicon,
         loading: t.loading,
+        proxy: t.proxy,
         canGoBack: history ? history.canGoBack() : false,
         canGoForward: history ? history.canGoForward() : false,
       };
@@ -238,6 +255,8 @@ function newTab({ rename = true } = {}) {
     favicon: null,
     loading: false,
     view: null,
+    identity: createIdentity(),
+    proxy: '',
   };
   tabs.push(tab);
   activate(tab.id);
@@ -257,13 +276,17 @@ function ensureView(tab, url = tab.url) {
   tab.view = new WebContentsView({
     webPreferences: {
       partition: partitionOf(tab.id),
+      // The spoof preload must patch the page's own window object, so it runs
+      // with contextIsolation off; sandbox stays on and nodeIntegration off,
+      // and it only ever talks to main over one synchronous IPC channel.
+      preload: path.join(__dirname, 'spoof.js'),
+      contextIsolation: false,
       sandbox: true,
-      contextIsolation: true,
       nodeIntegration: false,
     },
   });
   tab.view.setBackgroundColor('#ffffff');
-  configureSession(tab.view.webContents.session);
+  configureSession(tab.view.webContents.session, tab.identity, tab.proxy);
   wireTab(tab);
   const wc = tab.view.webContents;
   restoreSessionCookies(tab.id).finally(() => {
@@ -375,6 +398,27 @@ function setColor(id, color) {
   save();
 }
 
+// Proxy rules as Chromium accepts them: either a single "scheme://host:port"
+// proxy (socks5/socks5h/http/https/quic) or a per-protocol list like
+// "http=user:pass@proxy:8080;https=proxy:8443". Empty means direct.
+const PROXY_URL_RE = /^(?:socks5h?|http|https|quic):\/\/[^\s]+$/i;
+const PROXY_LIST_RE = /^[a-z]+=[^;]+(?:;[a-z]+=[^;]+)*$/i;
+function setTabProxy(id, proxy) {
+  const tab = getTab(id);
+  if (!tab) return;
+  const clean = String(proxy ?? '').trim().slice(0, 500);
+  if (clean && !PROXY_URL_RE.test(clean) && !PROXY_LIST_RE.test(clean)) return;
+  tab.proxy = clean;
+  if (tab.view) {
+    const ses = tab.view.webContents.session;
+    if (clean) ses.setProxy({ mode: 'fixed_servers', proxyRules: clean }).catch(() => {});
+    else ses.setProxy({ mode: 'direct' }).catch(() => {});
+    if (!tab.view.webContents.isDestroyed()) tab.view.webContents.reload();
+  }
+  pushState();
+  save();
+}
+
 function reorder(ids) {
   if (!Array.isArray(ids) || ids.length !== tabs.length) return;
   const next = ids.map(getTab);
@@ -399,10 +443,29 @@ function focusAddress() {
 // ---------- per-tab web contents ----------
 
 const configuredSessions = new WeakSet();
-function configureSession(ses) {
+function configureSession(ses, identity, proxy) {
   if (configuredSessions.has(ses)) return;
   configuredSessions.add(ses);
+
+  // Network-level identity: UA + languages consistent with the JS-level spoof.
+  ses.setUserAgent(identity.ua, identity.languages.join(','));
+  if (proxy) {
+    ses.setProxy({ mode: 'fixed_servers', proxyRules: proxy }).catch(() => {});
+  }
+
+  // Client Hints headers must agree with the fake UA, or the mismatch between
+  // sec-ch-ua / sec-ch-ua-platform and navigator.userAgent flags the browser.
+  ses.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = details.requestHeaders;
+    headers['sec-ch-ua'] = identity.brands.map((b) => `"${b.brand}";v="${b.version}"`).join(', ');
+    headers['sec-ch-ua-mobile'] = '?0';
+    headers['sec-ch-ua-platform'] = identity.chPlatform;
+    callback({ requestHeaders: headers });
+  });
+
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    // local-fonts reads the real installed fonts — never grant it.
+    if (permission === 'local-fonts') return callback(false);
     if (SAFE_PERMISSIONS.has(permission)) return callback(true);
     if (!ASK_PERMISSIONS.has(permission) || !win) return callback(false);
     const tab = tabs.find((t) => t.view?.webContents === wc);
@@ -479,7 +542,15 @@ function wireTab(tab) {
           height: 720,
           autoHideMenuBar: true,
           backgroundColor: '#ffffff',
-          webPreferences: { partition: partitionOf(tab.id), sandbox: true, contextIsolation: true },
+          // Popups share the tab's session AND its fake identity: the same
+          // preload answers the spoof-config query via the tab lookup.
+          webPreferences: {
+            partition: partitionOf(tab.id),
+            preload: path.join(__dirname, 'spoof.js'),
+            contextIsolation: false,
+            sandbox: true,
+            nodeIntegration: false,
+          },
         },
       };
     }
@@ -582,9 +653,43 @@ function showTabMenu(id) {
     { label: 'Reload', click: () => tab.view?.webContents.reload() },
     { label: 'Clear cookies and site data…', click: () => clearTabData(id) },
     { type: 'separator' },
+    {
+      label: tab.proxy ? `Proxy… (in use: ${tab.proxy.slice(0, 24)})` : 'Proxy…',
+      click: () => {
+        promptValue({
+          title: `Proxy for "${tab.name}"`,
+          label:
+            'Routes all of this tab\'s traffic through one proxy, so its IP differs\n' +
+            'from your other tabs. Chromium proxy rules, for example:\n' +
+            'socks5://127.0.0.1:1080  ·  http=proxy:8080;https=proxy:8443\n' +
+            'Leave empty for a direct connection. The tab reloads to apply it.',
+          value: tab.proxy || '',
+          placeholder: 'socks5://127.0.0.1:1080',
+          onSave: (value) => setTabProxy(id, value),
+        });
+      },
+    },
+    { type: 'separator' },
     { label: 'Close tab', accelerator: 'CmdOrCtrl+W', click: () => closeTab(id) },
   ]).popup({ window: win });
 }
+
+// A one-field dialog rendered in the browser UI: main can't show inputs with
+// Electron's native dialog, so it delegates to the renderer over IPC.
+let pendingPrompt = null;
+function promptValue({ title, label, value = '', placeholder = '', onSave }) {
+  if (!win || !uiReady) return;
+  win.webContents.focus();
+  win.webContents.send('ui:prompt', { kind: 'proxy', title, label, value, placeholder });
+  pendingPrompt = { kind: 'proxy', onSave };
+}
+
+on('ui:prompt-value', (value) => {
+  const prompt = pendingPrompt;
+  pendingPrompt = null;
+  // null = cancelled; "" (empty proxy = direct connection) is a real answer.
+  if (prompt && value != null) prompt.onSave(String(value));
+});
 
 // ---------- navigation ----------
 
@@ -668,6 +773,7 @@ on('tabs:new', () => newTab());
 on('tabs:activate', (id) => activate(id));
 on('tabs:close', (id) => closeTab(id));
 on('tabs:rename', (id, name) => renameTab(id, name));
+on('tabs:proxy', (id, proxy) => setTabProxy(id, proxy));
 on('tabs:reorder', (ids) => reorder(ids));
 on('tabs:menu', (id) => showTabMenu(id));
 on('nav:go', (text) => navigate(text));
@@ -676,6 +782,16 @@ on('nav:forward', () => withActive((wc) => wc.navigationHistory.goForward()));
 on('nav:reload', () => withActive((wc) => wc.reload()));
 on('nav:stop', () => withActive((wc) => wc.stop()));
 on('nav:focus-page', () => withActive((wc) => wc.focus()));
+
+// The spoof preload (contextIsolation off, so it runs inside the page world)
+// asks for its tab's fake identity synchronously before any page script runs.
+// The tab is identified by the session partition of the sender.
+ipcMain.on('spoof-config', (event) => {
+  const partition = event.sender.session?.partition || '';
+  const id = partition.startsWith('persist:tab-') ? partition.slice('persist:tab-'.length) : null;
+  const tab = id ? getTab(id) : null;
+  event.returnValue = tab ? tab.identity : null;
+});
 
 // ---------- shutdown ----------
 

@@ -50,6 +50,17 @@
         <li><kbd>Ctrl</kbd>+<kbd>T</kbd> opens a new isolated tab</li>
       </ul>
     </main>
+    <div id="prompt" hidden>
+      <div id="prompt-card" role="dialog" aria-modal="true" aria-labelledby="prompt-title">
+        <h2 id="prompt-title"></h2>
+        <p id="prompt-label"></p>
+        <input id="prompt-input" spellcheck="false" autocomplete="off" dir="ltr" />
+        <div id="prompt-actions">
+          <button id="prompt-cancel" type="button">Cancel</button>
+          <button id="prompt-save" type="button" class="primary">Save</button>
+        </div>
+      </div>
+    </div>
     <script src="renderer.js"></script>
   </body>
 </html>

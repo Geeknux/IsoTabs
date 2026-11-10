@@ -96,11 +96,25 @@ button {
 }
 
 .tab .icon {
+  position: relative;
   flex: none;
   display: grid;
   place-items: center;
   width: 16px;
   height: 16px;
+}
+
+/* Tiny badge when the tab routes through its own proxy. */
+.tab.proxied .icon::after {
+  content: '';
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface);
 }
 
 .tab .icon img {
@@ -356,4 +370,83 @@ kbd {
   background: var(--surface);
   color: var(--text);
   font: 12px inherit;
+}
+
+/* ---------- one-field prompt (proxy, ...) ---------- */
+
+#prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+#prompt[hidden] {
+  display: none;
+}
+
+#prompt-card {
+  width: min(480px, calc(100vw - 48px));
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 45%);
+}
+
+#prompt-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+#prompt-label {
+  margin: 0 0 14px;
+  color: var(--muted);
+  white-space: pre-line;
+}
+
+#prompt-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  outline: none;
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  user-select: text;
+}
+
+#prompt-input:focus {
+  border-color: var(--accent);
+}
+
+#prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+#prompt-actions button {
+  height: 30px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 15px;
+  background: var(--surface-hover);
+  color: var(--text);
+  cursor: pointer;
+}
+
+#prompt-actions button:hover {
+  filter: brightness(1.15);
+}
+
+#prompt-actions .primary {
+  background: var(--accent);
+  color: var(--field);
+  font-weight: 600;
 }

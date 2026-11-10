@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('browser', {
   rename: send('tabs:rename'),
   reorder: send('tabs:reorder'),
   tabMenu: send('tabs:menu'),
+  setProxy: send('tabs:proxy'),
   navigate: send('nav:go'),
   back: send('nav:back'),
   forward: send('nav:forward'),
@@ -21,4 +22,7 @@ contextBridge.exposeInMainWorld('browser', {
   onState: listen('state'),
   onRename: listen('ui:rename'),
   onFocusAddress: listen('ui:focus-address'),
+  onPrompt: listen('ui:prompt'),
+  // null means the user cancelled the prompt; "" is a real (empty) answer.
+  sendPromptValue: send('ui:prompt-value'),
 });
